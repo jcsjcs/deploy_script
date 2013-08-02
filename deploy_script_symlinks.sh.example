@@ -1,0 +1,6 @@
+# Test if symlink exists. If not, create it.
+if [ ! -e ~/appname/public/images/photos ]; then
+  echo "Creating photos symlink..."
+  ln -s ~/photos ~/appname/public/images/photos
+fi
+

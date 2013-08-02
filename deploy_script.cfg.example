@@ -1,0 +1,10 @@
+# Config variables for deploy script
+
+DEPLOYFOLDER="/home/username/deploy"
+BACKUPFOLDER="/home/username/deploy/live_code_backup"
+ARCHIVEFOLDER="/home/username/deploy/deploy_archive"
+TEMPFOLDER="/home/username/deploy/temp"
+LIVEFOLDER="/home/username/appname"
+
+RUNAS="username"
+

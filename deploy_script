@@ -1,0 +1,213 @@
+#!/bin/bash
+
+# Run with --remove-live to delete the live code before deploy.
+# UPDATE: remove live facility disabled. - not safe enough as written.
+
+# Checks the deploy folder for a deploy zip file.
+# Copies changes to live system.
+# Zip file is moved to an archive folder.
+# Live system is zipped and copied to backup folder before changes are applied.
+
+#deploy_dir
+#  +-- live_code_backup
+#  +-- deploy_archive
+#  +-- temp
+
+RED="\033[0;31m"
+BLUE="\033[0;34m"
+GREEN="\033[1;32m"
+ENDCOLOR="\033[0m"
+
+# Load up the variables:
+source ~/bin/deploy_script.cfg
+
+if [ `whoami` != $RUNAS ]
+then
+  echo -e $RED"THIS SCRIPT MUST BE RUN AS THE "$RUNAS" USER."$ENDCOLOR
+  exit 1
+fi
+
+if [ -d $DEPLOYFOLDER ]
+then
+  cd $DEPLOYFOLDER
+else
+  echo -e $RED"The deploy folder $RED$DEPLOYFOLDER$BLUE does not exist"$ENDCOLOR
+  exit 1
+fi
+
+# Check script options:
+TO_DELETE='N'
+if [ $# -eq 1 ]
+then
+  if [ $1 = "--remove-live" ]
+  then
+    echo -e $RED"THE --remove-live option has been removed."$ENDCOLOR
+    exit 1
+    TO_DELETE='Y'
+  else
+    echo -e $RED"INVALID argument supplied. expecting none or --remove-live (Received $1)!"$ENDCOLOR
+    exit 1
+  fi
+elif [ $# -gt 1 ]
+then
+  echo -e $RED"TOO many arguments supplied. expecting none or --remove-live !"$ENDCOLOR
+  exit 1
+fi
+
+# Create subfolders if they do not exist.
+mkdir -p $BACKUPFOLDER
+mkdir -p $ARCHIVEFOLDER
+mkdir -p $TEMPFOLDER
+# Create live folder if it does not exist (first-time deploy).
+mkdir -p $LIVEFOLDER
+
+echo -e $GREEN"Checking for zip file in $DEPLOYFOLDER ..."$ENDCOLOR
+
+# Check that there is a zip file to process - and that there is only one.
+CNT=0
+TO_PROCESS=""
+for fn in *.zip
+do
+  CNT=`expr $CNT + 1`
+  TO_PROCESS=$fn
+done
+
+if [ $CNT -eq 1 ]
+then
+  if [ $TO_PROCESS = "*.zip" ]
+  then
+    echo -e $RED"There are no zipfiles in the deploy folder - NOTHING TO DO"$ENDCOLOR
+    exit 1
+  fi
+  echo -e $BLUE"One file to be processed - $TO_PROCESS"$ENDCOLOR
+elif [ $CNT -eq 0 ]
+then
+  echo -e $RED"There are no zipfiles in the deploy folder - NOTHING TO DO"$ENDCOLOR
+  exit 1
+else
+  echo -e $RED"There are $CNT zipfiles in the deploy folder - TOO MANY"$ENDCOLOR
+  exit 1
+fi
+
+echo -e $BLUE"Unzipping $TO_PROCESS to temp folder and uncompressing..."$ENDCOLOR
+# Move the deployment zipfile and unzip the new code:
+ZIPFILE="$TEMPFOLDER/$TO_PROCESS"
+mv $TO_PROCESS $ZIPFILE
+unzip -qq $ZIPFILE -d temp
+
+echo -e $BLUE"Clearing .svn folders..."$ENDCOLOR
+# CLEAR SVN IN TEMP DIR
+cd $TEMPFOLDER
+find -name "\.svn" -exec rm -rf {} \;
+
+echo -e $BLUE"Backing up and archiving live code..."$ENDCOLOR
+# BACKUP the live code in a zipfile:
+DATE="`date '+%Y_%m_%d_%H_%M'`"
+BACKUPZIP="$BACKUPFOLDER/backup-$DATE"
+cd $LIVEFOLDER
+#zip -rq $BACKUPZIP . -x \log* \tmp*
+zip -rq $BACKUPZIP . -x log\* tmp\* edi/logs\* \*.zip \*.jar public/downloads\* \.svn\*
+
+echo -e $BLUE"Archiving deployed zipfile..."$ENDCOLOR
+# Archive the deployed zipfile
+mv $ZIPFILE "$ARCHIVEFOLDER/$TO_PROCESS-$DATE"
+
+# REMOVE contents of the live system if --remove-live flag is set:
+if [ $TO_DELETE = 'Y' ]
+then
+  echo -e $RED"Deleting live code: FRESH deploy..."$ENDCOLOR
+  rm -rf $LIVEFOLDER/*
+  rm -rf $LIVEFOLDER/\.??*
+fi
+
+echo -e $BLUE"Checking if extracted folder includes root folder..."$ENDCOLOR
+
+# Did the zip file include a root folder?
+if [ `ls $TEMPFOLDER | wc -l` = 1 ]
+then
+  # One folder only - let's see if it is one of the first-level
+  #                   folders of the live app or not.
+  SUBFOLDER=`ls $TEMPFOLDER`
+  FIRSTLEVEL=(`ls "$LIVEFOLDER"`)
+  is_ok='N'
+  for FLD in "${FIRSTLEVEL[@]}"
+  do
+    if [ $FLD = "$SUBFOLDER" ]
+    then
+      is_ok='Y'
+      break
+    fi
+  done
+  
+  if [ $is_ok = 'N' ] # Not a first-level folder name
+  then
+    EXTRACTEDFOLDER="${TEMPFOLDER}/${SUBFOLDER}"
+  else
+    EXTRACTEDFOLDER=$TEMPFOLDER
+  fi
+else
+  EXTRACTEDFOLDER=$TEMPFOLDER
+fi
+
+cd $EXTRACTEDFOLDER
+if [ $TO_DELETE = 'N' ]
+then
+  echo -e $BLUE"Removing database.yml, edi runners and similar files from deployment package..."$ENDCOLOR
+  # DELETE database.yml & Globals - Place any other client-sensitive files here.
+  if [ -d edi/bin ]
+  then
+    rm -rf edi/bin/*
+  fi
+  if [ -f config/database.yml ]
+  then
+    rm config/database.yml
+  fi
+  if [ -f lib/globals.rb ]
+  then
+    echo -e $RED"***********************************************************************************************"$ENDCOLOR
+    echo -e $RED"* THIS DEPLOYMENT PACKAGE INCLUDES GLOBALS WHICH WILL NOT BE APPLIED. Please update manually. *"$ENDCOLOR
+    echo -e $RED"***********************************************************************************************"$ENDCOLOR
+    rm lib/globals.rb
+  fi
+fi
+
+echo -e $BLUE"Updating live code with deployment package..."$ENDCOLOR
+# Copy changes to the live system
+#cp -r $EXTRACTEDFOLDER/* $LIVEFOLDER
+#cp -a $EXTRACTEDFOLDER/* $LIVEFOLDER
+#rsync -a $EXTRACTEDFOLDER $LIVEFOLDER/
+# This does not copy hidden files.....
+cp -a $EXTRACTEDFOLDER/* $LIVEFOLDER
+
+# Re-create symlinks if required.
+if [ -e ~/bin/deploy_script_symlinks.sh ]; then
+  echo -e $BLUE"Recreating symlinks if required..."$ENDCOLOR
+  source ~/bin/deploy_script_symlinks.sh
+fi
+
+################################################################################
+# TODO: Copy the log & tmp folders back from the zipfile if this is a replace. #
+################################################################################
+
+echo -e $BLUE"Removing temporary files..."$ENDCOLOR
+#Cleanup
+rm -rf $TEMPFOLDER/*
+rm -rf $TEMPFOLDER/\.??*
+
+cd $LIVEFOLDER
+echo -e $BLUE"Running rake tasks..."$ENDCOLOR
+# Rake tasks
+#rake js:combine_content > /dev/null 2>&1
+#rake js:combine_home > /dev/null 2>&1
+rake js:combine_all > /dev/null 2>&1
+
+echo -e $BLUE"Restarting Passenger..."$ENDCOLOR
+# Restart Passenger
+touch tmp/restart.txt
+
+if [ $TO_DELETE = 'Y' ]
+then
+  echo -e $GREEN"...DONE...$RED NB: tmp and log folders need to be created..."$ENDCOLOR
+else
+  echo -e $GREEN"...DONE..."$ENDCOLOR
+fi
